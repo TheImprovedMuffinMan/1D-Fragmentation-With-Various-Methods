@@ -1,0 +1,21 @@
+# Material properties
+density = 3900
+E = 370e9
+strength = 262e6
+toughness = 50
+
+# Bar geometry
+length = 0.005
+dx = 1e-5
+m = 5.015
+
+# Bond model
+bond_law = bilinear
+bond_shape = constant
+
+# Random field
+scatter = 0
+seed = 1
+
+# Loading
+strain_rate = 1e4

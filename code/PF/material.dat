@@ -1,0 +1,44 @@
+model solid_mechanics_model [
+  material phasefield no_split [
+    name = bar
+    rho = 3900.0
+    E = 370000000000.0
+    nu = 0.0
+    finite_deformation = false
+    eta = 0.
+    Plane_Stress = false
+    degrade_mass = false
+  ]
+]
+
+model phase_field_model [
+  phasefield linear no_split [
+    name = bar
+    l0 = 1.01065e-4
+    gc = 50.0
+    E = 370000000000.0
+    nu = 0.0
+    Plane_Stress = false
+    irreversibility_type = tao
+  ]
+]
+
+user parameters [
+  bar_length = 0.005
+  number_elements = 500
+  strain_rate = 10000
+
+  displacement = 0.0
+  increment_displacement = false
+
+  damage_limit = 0.95
+  time_step_factor = 0.1
+
+  phase_energy_tolerance = 1e-4
+  stable_steps = 10
+
+  dump_freq = 100
+  output_dir = ../data/test_pf
+  diagnostics_file = energies_pf.out
+  fragment_file = fragments_pf.out
+]

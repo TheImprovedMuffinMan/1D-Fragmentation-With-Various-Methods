@@ -1,0 +1,30 @@
+# Build
+build/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+
+# Simulation runs/results
+data/
+
+# Informational papers
+papers/
+
+# Sweep files
+*.sh
+*.pdf
+*.png
+# Notes
+/notes
+/phase_field
+
+
+# Python
+__pycache__/
+.ipynb_checkpoints/
+
+# Editor
+.vscode/
+akantu_env/
+cas-eth-ser/
+
