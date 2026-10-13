@@ -21,6 +21,7 @@ struct PhaseFieldParameters {
   std::string output_dir;
   std::string diagnostics_file;
   std::string fragment_file;
+  akantu::Real max_time;
 };
 
 /**

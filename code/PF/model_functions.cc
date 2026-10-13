@@ -47,6 +47,7 @@ PhaseFieldParameters readSimulationParameters() {
   params.phase_energy_tolerance =
       user.getParameterValue<Real>("phase_energy_tolerance");
   params.stable_steps = user.getParameterValue<UInt>("stable_steps");
+  params.max_time = user.getParameterValue<Real>("max_time");
 
   return params;
 }
@@ -386,7 +387,7 @@ void runSimulation(CouplerSolidPhaseField& model,
   Int previous_nb_fragments = -1;
   UInt stable_fragment_checks = 0;
 
-  const UInt check_frequency = 1000;
+  const UInt check_frequency = params.number_elements;
   const UInt required_stable_checks = params.stable_steps;
 
   // Simulation variables
@@ -396,7 +397,9 @@ void runSimulation(CouplerSolidPhaseField& model,
   double simulation_wall_time = 0.0;
 
   // Time integration
-  while (stable_fragment_checks < required_stable_checks) {
+  std::string stopping_reason;
+  while (stable_fragment_checks < required_stable_checks &&
+         time < params.max_time) {
     const auto step_start = std::chrono::steady_clock::now();
 
     const Real current_du = 0.5 * params.bar_length * params.strain_rate * dt;
@@ -452,9 +455,25 @@ void runSimulation(CouplerSolidPhaseField& model,
     }
   }
 
+  // if (prank == 0) {
+  //   std::cout << "Fragment count stable for " << required_stable_checks
+  //             << " consecutive checks.\n";
+
+  //   std::cout << "Final time: " << time << "\n";
+  // }
+  if (stable_fragment_checks >= required_stable_checks) {
+    stopping_reason = "fragment_count_converged";
+  } else {
+    stopping_reason = "maximum_time_reached";
+  }
+
   if (prank == 0) {
-    std::cout << "Fragment count stable for " << required_stable_checks
-              << " consecutive checks.\n";
+    if (stopping_reason == "fragment_count_converged") {
+      std::cout << "Fragment count stable for " << required_stable_checks
+                << " consecutive checks.\n";
+    } else {
+      std::cout << "Maximum simulation time reached.\n";
+    }
 
     std::cout << "Final time: " << time << "\n";
   }
@@ -493,7 +512,7 @@ void runSimulation(CouplerSolidPhaseField& model,
     summary.steps = static_cast<std::size_t>(step);
     summary.num_fragments = static_cast<std::size_t>(n_fragments);
     summary.energy_error = final_energy_error;
-    summary.stopping_reason = "fragment_count_converged";
+    summary.stopping_reason = stopping_reason;
 
     writeRunSummary(summary_file, summary);
 

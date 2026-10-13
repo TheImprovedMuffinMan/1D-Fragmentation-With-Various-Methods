@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstddef>
 #include <random>
+#include <stdexcept>
 #include <vector>
 
 namespace {
@@ -130,6 +131,9 @@ RandomFieldData randomField(const Parameters& params,
                             double dx,
                             double horizon,
                             double L) {
+  if (params.scatter < 0.0) {
+    throw std::runtime_error("scatter must be non-negative.");
+  }
   const double E = params.E;
   const double mu_strength = params.strength;
   const double mu_toughness = params.toughness;

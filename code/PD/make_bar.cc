@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <iostream>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -13,36 +14,57 @@
 Bar makeBar(const Parameters& params) {
   Bar bar;
 
-  // points inside the bar
+  // Physical bar length is kept fixed.
+  const double L = params.length;
+
+  // Number of material points corresponding approximately to the requested dx.
   const std::size_t num_points =
-      static_cast<std::size_t>(std::llround(params.length / params.dx));
+      static_cast<std::size_t>(std::llround(L / params.dx));
 
-  // bar length rounded to whole number of cells
-  const double L = num_points * params.dx;
+  if (num_points < 2) {
+    throw std::runtime_error(
+        "The bar must contain at least two material points.");
+  }
 
-  // spacing between points, horizon and how far they reach
+  // Actual discretisation spacing. This guarantees that the bar length
+  // remains exactly L.
   const double dx = L / static_cast<double>(num_points);
-  const double horizon = params.m * params.dx;
 
-  // Each point owns a cell dx wide, so a neighbour with centre which is up to
-  // half a cell beyond the horizon will still overlap. that sets how many
-  // neighbours a point has on each side and how many points are needed in the
-  // end
+  // Physical peridynamic horizon, independent of the discretisation spacing.
+  const double horizon = params.horizon;
+
+  if (horizon <= dx) {
+    throw std::runtime_error(
+        "The peridynamic horizon must be greater than dx.");
+  }
+
+  // Number of point spacings contained in one horizon.
+  const double m = horizon / dx;
+
+  // Each point owns a cell dx wide. A neighbour whose centre lies up to
+  // half a cell beyond the horizon still partially overlaps the horizon.
   const double radius = dx / 2.0;
+
   const std::size_t reach =
       static_cast<std::size_t>(std::floor((horizon + radius) / dx + 1e-12));
+
+  if (reach == 0) {
+    throw std::runtime_error(
+        "The peridynamic horizon contains no neighbouring points.");
+  }
 
   const std::size_t num_boundary = reach;
   const std::size_t num_total = num_points + 2 * num_boundary;
 
-  // coordinates of all points, including ghost points
+  // Coordinates of all points, including ghost points.
   std::vector<double> x(num_total);
+
   for (std::size_t i = 0; i < num_total; ++i) {
     x[i] =
         (static_cast<double>(i) + 0.5 - static_cast<double>(num_boundary)) * dx;
   }
 
-  // indices of points inside the bar, numbered from 0 to num_points - 1
+  // Indices of points inside the physical bar.
   std::vector<std::size_t> inside;
   inside.reserve(num_points);
 
@@ -50,7 +72,7 @@ Bar makeBar(const Parameters& params) {
     inside.push_back(num_boundary + i);
   }
 
-  // boundary points are the first and last num_boundary points
+  // Boundary points are the ghost points on the two ends.
   std::vector<std::size_t> boundary;
   boundary.reserve(2 * num_boundary);
 
@@ -62,7 +84,9 @@ Bar makeBar(const Parameters& params) {
     boundary.push_back(i);
   }
 
-  const double area = dx * dx;
+  // Physical cross-sectional area and material-point volume.
+  // The area must not depend on the discretisation spacing.
+  const double area = params.area;
   const double volume = area * dx;
 
   // bonds
@@ -193,6 +217,9 @@ Bar makeBar(const Parameters& params) {
   }
 
   E_as_built *= 0.5;
+  if (E_as_built <= 0.0) {
+    throw std::runtime_error("Computed peridynamic stiffness is not positive.");
+  }
 
   const double stiffness_scale = E / E_as_built;
 
@@ -235,6 +262,11 @@ Bar makeBar(const Parameters& params) {
     }
   }
 
+  if (cut_sum <= 0.0) {
+    throw std::runtime_error(
+        "Could not determine a positive fracture-energy normalisation.");
+  }
+
   std::vector<double> target(num_bonds);
   for (std::size_t b = 0; b < num_bonds; ++b) {
     target[b] = toughness[b] * area / cut_sum;
@@ -260,13 +292,7 @@ Bar makeBar(const Parameters& params) {
     throw std::invalid_argument("bond_law must be 'bilinear' or 'pmb'.");
   }
 
-  double mean_s_break = 0.0;
-  for (const double value : s_break) {
-    mean_s_break += value;
-  }
-  mean_s_break /= static_cast<double>(num_bonds);
-
-  // safety: a bond must break before it opens
+  // safety: a bond must break after it starts softening
   if (bond_law == "bilinear") {
     for (std::size_t b = 0; b < num_bonds; ++b) {
       if (s_break[b] <= s_elastic[b]) {
@@ -274,6 +300,18 @@ Bar makeBar(const Parameters& params) {
       }
     }
   }
+
+  // Mean elastic and failure stretches actually used by the simulation.
+  double mean_s_elastic = 0.0;
+  double mean_s_break = 0.0;
+
+  for (std::size_t b = 0; b < num_bonds; ++b) {
+    mean_s_elastic += s_elastic[b];
+    mean_s_break += s_break[b];
+  }
+
+  mean_s_elastic /= static_cast<double>(num_bonds);
+  mean_s_break /= static_cast<double>(num_bonds);
 
   // only bonds between two inside points can break. Bonds to boundary points
   // are held together so the bar is always gripped at its ends
@@ -285,9 +323,9 @@ Bar makeBar(const Parameters& params) {
                      bj[b] >= first_inside && bj[b] < last_inside;
   }
 
-  // The largest time step that keeps the calculation stable is set by the
-  // stiffest point. We use half of it to be stable (can be changed to even
-  // lower with contact).
+  // The largest stable time step is determined by the stiffest point.
+  // The actual time step is obtained by applying the user-defined
+  // time-step safety factor.
   std::vector<double> total_spring(num_total, 0.0);
   for (std::size_t b = 0; b < num_bonds; ++b) {
     const double spring = k_bond[b] / bond_length[b];
@@ -299,13 +337,33 @@ Bar makeBar(const Parameters& params) {
   for (const std::size_t i : inside) {
     max_total_spring = std::max(max_total_spring, total_spring[i]);
   }
-  const double dt_max = std::sqrt(2.0 * params.density / max_total_spring);
-  const double dt = 0.5 * dt_max;
+  if (max_total_spring <= 0.0) {
+    throw std::runtime_error(
+        "Could not determine a positive stable time step.");
+  }
 
+  const double dt_max = std::sqrt(2.0 * params.density / max_total_spring);
+
+  const double dt = params.time_step_factor * dt_max;
+
+  // Calibration diagnostics
+  std::cout << "\nPD calibration diagnostics\n";
+  std::cout << "E_as_built: " << E_as_built << "\n";
+  std::cout << "stiffness_scale: " << stiffness_scale << "\n";
+  std::cout << "cut_sum: " << cut_sum << "\n";
+  std::cout << "mean_s_elastic: " << mean_s_elastic << "\n";
+  std::cout << "mean_s_break: " << mean_s_break << "\n";
+  std::cout << "dt_max: " << dt_max << "\n";
+  std::cout << "dt: " << dt << "\n";
+  std::cout << "time_step_factor: " << params.time_step_factor << "\n";
+  std::cout << "dx_calibration: " << dx << "\n";
+  std::cout << "horizon_calibration: " << horizon << "\n";
+  std::cout << "m_calibration: " << m << "\n\n";
   // Save all the data in the Bar struct.
   bar.L = L;
   bar.dx = dx;
   bar.horizon = horizon;
+  bar.m = m;
   bar.num_points = num_points;
   bar.num_boundary = num_boundary;
   bar.num_total = num_total;

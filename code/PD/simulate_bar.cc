@@ -11,6 +11,7 @@
 #include <iostream>
 #include <limits>
 #include <numeric>
+#include <stdexcept>
 #include <vector>
 
 namespace {
@@ -81,30 +82,6 @@ void moveBoundary(std::vector<double>& u,
     u[i] = rate * t * relative_position;
     v[i] = rate * relative_position;
   }
-}
-
-std::vector<std::size_t> makeSaveSteps(std::size_t n_steps,
-                                       std::size_t n_snapshots) {
-  std::vector<std::size_t> save_at;
-
-  save_at.reserve(n_snapshots + 2);
-  save_at.push_back(0);
-
-  if (n_snapshots > 1) {
-    for (std::size_t i = 0; i < n_snapshots; ++i) {
-      const double fraction =
-          static_cast<double>(i) / static_cast<double>(n_snapshots - 1);
-      const std::size_t step = static_cast<std::size_t>(
-          std::llround(fraction * static_cast<double>(n_steps)));
-      save_at.push_back(step);
-    }
-  }
-
-  save_at.push_back(n_steps);
-  std::sort(save_at.begin(), save_at.end());
-  save_at.erase(std::unique(save_at.begin(), save_at.end()), save_at.end());
-
-  return save_at;
 }
 
 void recordSnapshot(SimulationResults& results,
@@ -216,22 +193,31 @@ SimulationResults simulateBar(const Parameters& params, const Bar& bar) {
     energy_coef_breakable[q] = energy_coef[b];
   }
 
-  // ------------------------------------------------------------ run length
+  // run length
+  if (params.max_time <= 0.0) {
+    throw std::runtime_error("max_time must be greater than zero.");
+  }
 
-  const double t_fail = bar.mean_s_break / rate;
-  const double t_total = 6.0 * t_fail;
+  if (params.dump_freq == 0) {
+    throw std::runtime_error("dump_freq must be greater than zero.");
+  }
 
-  const std::size_t n_steps = std::max<std::size_t>(
-      1, static_cast<std::size_t>(std::ceil(t_total / dt)));
+  if (params.check_frequency == 0) {
+    throw std::runtime_error("check_frequency must be greater than zero.");
+  }
 
-  const std::size_t n_snapshots = 120;
-  const std::size_t n_quiet = 12;
+  if (params.stable_steps == 0) {
+    throw std::runtime_error("stable_steps must be greater than zero.");
+  }
 
-  const double quiet_tol = 1e-3;
+  if (dt <= 0.0) {
+    throw std::runtime_error("Time step must be greater than zero.");
+  }
 
-  const std::vector<std::size_t> save_at = makeSaveSteps(n_steps, n_snapshots);
+  std::size_t previous_nb_fragments = 0;
+  std::size_t stable_fragment_checks = 0;
 
-  // --------------------------------------------------------- initial state
+  bool have_previous_fragment_count = false;
 
   std::vector<double> u(bar.num_total, 0.0);
   std::vector<double> v(bar.num_total);
@@ -283,24 +269,25 @@ SimulationResults simulateBar(const Parameters& params, const Bar& bar) {
                  work_in,
                  bar,
                  rho);
+  std::size_t step = 0;
+  double time = 0.0;
 
-  std::size_t save_index = 1;
-
-  std::cout << "Running " << n_steps << " time steps of " << dt << " s ("
-            << params.bond_law << " bonds, strain rate " << rate
-            << " /s) ...\n";
-
-  const std::size_t print_every = std::max<std::size_t>(1, n_steps / 10);
-  bool stopped_early = false;
-  std::size_t final_step = 0;
   const auto start_time = std::chrono::steady_clock::now();
+
+  std::cout << "Time step: " << dt << " s\n";
+  std::cout << "Strain rate: " << rate << " /s\n";
+  std::cout << "Maximum time: " << params.max_time << " s\n";
+  std::cout << "Stable fragment checks required: " << params.stable_steps
+            << "\n";
 
   // =========================================================== time loop
 
-  for (std::size_t step = 1; step <= n_steps; ++step) {
-    final_step = step;
+  while (stable_fragment_checks < params.stable_steps &&
+         time + dt <= params.max_time) {
+    ++step;
+    time = static_cast<double>(step) * dt;
 
-    const double t = static_cast<double>(step) * dt;
+    const double t = time;
 
     // 1-2. Half velocity update and position update.
     std::vector<double> v_half(bar.num_points);
@@ -363,10 +350,33 @@ SimulationResults simulateBar(const Parameters& params, const Bar& bar) {
     }
     work_in += 0.5 * dt * (power_prev + power_now);
     power_prev = power_now;
-    // Record snapshots.
-    if (save_index < save_at.size() && step == save_at[save_index]) {
+    // ------------------------------------------------ fragment convergence
+
+    if (step % params.check_frequency == 0) {
+      const FragmentData fragment_check = countFragments(bar, health);
+
+      const std::size_t nb_fragments = fragment_check.num_fragments;
+
+      if (have_previous_fragment_count &&
+          nb_fragments == previous_nb_fragments && nb_fragments > 1) {
+        ++stable_fragment_checks;
+
+      } else {
+        stable_fragment_checks = 0;
+      }
+
+      previous_nb_fragments = nb_fragments;
+      have_previous_fragment_count = true;
+
+      std::cout << "Step: " << step << " -- fragments = " << nb_fragments
+                << " -- stable checks = " << stable_fragment_checks << "/"
+                << params.stable_steps << "\n";
+    }
+    // ------------------------------------------------ periodic output
+
+    if (step % params.dump_freq == 0) {
       recordSnapshot(results,
-                     t,
+                     time,
                      u,
                      v,
                      health,
@@ -375,26 +385,21 @@ SimulationResults simulateBar(const Parameters& params, const Bar& bar) {
                      work_in,
                      bar,
                      rho);
-      ++save_index;
-      if (dissipated > 0.0 && results.dissipated.size() > n_quiet) {
-        const std::size_t old = results.dissipated.size() - 1 - n_quiet;
-
-        if (results.dissipated[old] > 0.0 &&
-            dissipated - results.dissipated[old] <= quiet_tol * dissipated) {
-          stopped_early = true;
-          break;
-        }
-      }
     }
+  }
 
-    if (step % print_every == 0) {
-      const double progress =
-          100.0 * static_cast<double>(step) / static_cast<double>(n_steps);
-
-      std::cout << progress << " %"
-                << "   t = " << t * 1e6 << " us"
-                << "   fragments = " << results.num_fragments.back() << "\n";
-    }
+  if (results.t.empty() || std::abs(results.t.back() - time) >
+                               std::numeric_limits<double>::epsilon()) {
+    recordSnapshot(results,
+                   time,
+                   u,
+                   v,
+                   health,
+                   bond_data.stretch,
+                   dissipated,
+                   work_in,
+                   bar,
+                   rho);
   }
 
   const auto end_time = std::chrono::steady_clock::now();
@@ -407,8 +412,14 @@ SimulationResults simulateBar(const Parameters& params, const Bar& bar) {
   }
 
   results.health = health;
-  results.steps = final_step;
-  results.stopped_early = stopped_early;
+  results.steps = step;
+
+  if (stable_fragment_checks >= params.stable_steps) {
+    results.stopping_reason = "fragment_count_converged";
+  } else {
+    results.stopping_reason = "maximum_time_reached";
+  }
+
   results.run_time = elapsed.count();
 
   // ---------------------------------------------------------- energy check
@@ -433,12 +444,11 @@ SimulationResults simulateBar(const Parameters& params, const Bar& bar) {
       max_error / std::max(max_total, std::numeric_limits<double>::epsilon());
 
   std::cout << "Done in " << results.run_time << " s. "
-            << results.num_fragments.back() << " fragments.";
+            << results.num_fragments.back() << " fragments.\n";
 
-  if (stopped_early) {
-    std::cout << " (Stopped early at step " << final_step << " of " << n_steps
-              << ": nothing was breaking any more.)";
-  }
+  std::cout << "Final physical time: " << time << " s\n";
+  std::cout << "Final step: " << step << "\n";
+  std::cout << "Stopping reason: " << results.stopping_reason << "\n";
 
   std::cout << "\n";
 

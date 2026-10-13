@@ -36,8 +36,10 @@ user parameters [
 
   phase_energy_tolerance = 1e-4
   stable_steps = 10
+  max_time = 2e-6
 
   dump_freq = 100
+
   output_dir = ../data/test_pf
   diagnostics_file = energies_pf.out
   fragment_file = fragments_pf.out

@@ -21,6 +21,7 @@ struct Bar {
   double L;
   double dx;
   double horizon;
+  double m;
   std::size_t num_points;
   std::size_t num_boundary;
   std::size_t num_total;

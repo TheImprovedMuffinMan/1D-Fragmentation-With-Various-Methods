@@ -4,6 +4,7 @@
 #include "bar.hh"
 
 #include <cstddef>
+#include <string>
 #include <vector>
 
 struct Parameters;
@@ -27,7 +28,7 @@ struct SimulationResults {
   std::vector<double> health;
 
   std::size_t steps;
-  bool stopped_early;
+  std::string stopping_reason;
   double run_time;
   double energy_error;
 };
@@ -49,8 +50,8 @@ struct SimulationResults {
  * recalculated, and the point velocities are advanced.
  *
  * The simulation stops either when the prescribed maximum simulation time is
- * reached or when the dissipated fracture energy has changed by less than the
- * specified tolerance over several recorded snapshots.
+ * reached or when the number of fragments remains unchanged for the prescribed
+ * number of consecutive fragment-count checks.
  *
  * @param params Simulation and material parameters.
  * @param bar Initialised peridynamic bar.

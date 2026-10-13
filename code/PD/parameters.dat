@@ -6,16 +6,33 @@ toughness = 50
 
 # Bar geometry
 length = 0.005
+area = 1e-6
+
+# Peridynamic discretisation
 dx = 1e-5
-m = 5.015
+horizon = 5.015e-5
 
 # Bond model
 bond_law = bilinear
-bond_shape = constant
+bond_shape = conical
 
 # Random field
-scatter = 0
+scatter = 0.01
 seed = 1
 
 # Loading
 strain_rate = 1e4
+
+# Time integration
+time_step_factor = 0.5
+max_time = 4e-6
+
+# Fragment convergence
+check_frequency = 100
+stable_steps = 10
+
+# Output
+dump_freq = 100
+output_dir = ../data/PD
+diagnostics_file = results.out
+fragment_file = fragments.out
